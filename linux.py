@@ -52,12 +52,13 @@ print("[*] ACK sent.")
 # Step 3: Send PSH with payload
 
 psh_payload = bytes.fromhex("7fe40c74000000000000060900003c535443500f003e")
+payload_len = len(psh_payload)
 
 psh = TCP(
     sport=src_port,
     dport=dst_port,
     flags="PA",
-    seq=ack_seq,
+    seq=ack_seq,  # same as ACK seq
     ack=ack_ack,
     window=0xfaf0
 )
@@ -66,7 +67,11 @@ print("[*] Sending PSH with payload...")
 send(ip/psh/psh_payload)
 print("[*] PSH sent.")
 
-# Step 4: Sniff response
+# Step 4: Update sequence number after sending PSH
+ack_seq = ack_seq + payload_len
+
+# Optionally send ACK back to server if needed here
+# For now, let's sniff for response:
 
 print("[*] Waiting for response...")
 resp = sniff(filter=f"tcp and host {dst_ip} and port {dst_port}", timeout=5, count=5)
