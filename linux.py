@@ -1,18 +1,26 @@
 from scapy.all import *
+import time
+
+# Full device path for sending packets (from your get_if_list output)
+iface_send = r"\\Device\\NPF_{26827995-6805-422C-BA17-07080BDF0E50}"
+
+# Friendly interface name for sniffing (from get_windows_if_list output)
+iface_sniff = "Wi-Fi"
 
 src_ip = "10.0.0.2"
 dst_ip = "10.0.0.1"
 src_port = 52523
 dst_port = 2000
 
-# Step 1: Send SYN
 ip = IP(src=src_ip, dst=dst_ip, ttl=128, id=0xae59)
+syn_seq = 0xf33e2db9
+
 syn = TCP(
     sport=src_port,
     dport=dst_port,
     flags="S",
-    seq=0x748ec552,
-    window=0xfaf0,
+    seq=syn_seq,
+    window=64240,
     options=[
         ("MSS", 1460),
         ("NOP", None),
@@ -24,7 +32,7 @@ syn = TCP(
 )
 
 print("[*] Sending SYN...")
-synack = sr1(ip/syn, timeout=2)
+synack = sr1(ip/syn, timeout=2, iface=iface_send, verbose=0)
 if not synack:
     print("[!] No SYN-ACK received.")
     exit()
@@ -32,8 +40,7 @@ if not synack:
 print("[*] Received SYN-ACK:")
 synack.show()
 
-# Step 2: Send ACK to complete handshake
-ack_seq = syn.seq + 1
+ack_seq = syn_seq + 1
 ack_ack = synack.seq + 1
 
 ack = TCP(
@@ -42,43 +49,47 @@ ack = TCP(
     flags="A",
     seq=ack_seq,
     ack=ack_ack,
-    window=0xfaf0
+    window=64240
 )
 
-print("[*] Sending ACK to complete handshake...")
-send(ip/ack)
+print("[*] Sending ACK...")
+send(ip/ack, iface=iface_send, verbose=0)
 print("[*] ACK sent.")
 
-# Step 3: Send PSH with payload
+payload = bytes.fromhex("3c685354435008000000003e00000000060800003c535443500e003e")
 
-psh_payload = bytes.fromhex("7fe40c74000000000000060900003c535443500f003e")
-payload_len = len(psh_payload)
-
-psh = TCP(
+data_pkt = TCP(
     sport=src_port,
     dport=dst_port,
     flags="PA",
-    seq=ack_seq,  # same as ACK seq
+    seq=ack_seq,
     ack=ack_ack,
-    window=0xfaf0
+    window=64240
 )
 
-print("[*] Sending PSH with payload...")
-send(ip/psh/psh_payload)
-print("[*] PSH sent.")
+print("[*] Sending initial data...")
+send(ip/data_pkt/payload, iface=iface_send, verbose=0)
+ack_seq += len(payload)
+print("[*] Data sent.")
 
-# Step 4: Update sequence number after sending PSH
-ack_seq = ack_seq + payload_len
+def packet_callback(pkt):
+    if IP in pkt and TCP in pkt:
+        if pkt[IP].src == dst_ip and pkt[TCP].sport == dst_port:
+            if Raw in pkt:
+                data = pkt[Raw].load
+                hex_data = data.hex()
+                ascii_data = ''.join([chr(b) if 32 <= b < 127 else '.' for b in data])
+                print(f"[+] {len(data)} bytes received:")
+                print(f"    HEX   : {hex_data}")
+                print(f"    ASCII : {ascii_data}")
+            else:
+                print("[+] MyChron sent a TCP packet (no payload)")
 
-# Optionally send ACK back to server if needed here
-# For now, let's sniff for response:
-
-print("[*] Waiting for response...")
-resp = sniff(filter=f"tcp and host {dst_ip} and port {dst_port}", timeout=5, count=5)
-
-if resp:
-    print(f"[*] Received {len(resp)} packets:")
-    for pkt in resp:
-        pkt.show()
-else:
-    print("[!] No response received.")
+print("[*] Listening for response from MyChron (10 seconds)...")
+sniff(
+    iface=iface_sniff,
+    filter=f"tcp and src host {dst_ip} and src port {dst_port} and dst port {src_port}",
+    prn=packet_callback,
+    timeout=10,
+    store=0
+)
