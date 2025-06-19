@@ -32,7 +32,7 @@ if not synack:
 print("[*] Received SYN-ACK:")
 synack.show()
 
-# Step 2: Send ACK to complete handshake
+# Step 2: Send ACK to complete handshake and wait for response
 ack = TCP(
     sport=src_port,
     dport=dst_port,
@@ -42,6 +42,11 @@ ack = TCP(
     window=0xfaf0
 )
 
-send(ip/ack)
-print("[*] Sent ACK to complete handshake.")
+print("[*] Sending ACK to complete handshake and waiting for response...")
+response = sr1(ip/ack, timeout=3)
 
+if response:
+    print("[*] Received response after ACK:")
+    response.show()
+else:
+    print("[!] No response received after ACK.")
