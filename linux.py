@@ -32,21 +32,48 @@ if not synack:
 print("[*] Received SYN-ACK:")
 synack.show()
 
-# Step 2: Send ACK to complete handshake and wait for response
+# Step 2: Send ACK to complete handshake
+ack_seq = syn.seq + 1
+ack_ack = synack.seq + 1
+
 ack = TCP(
     sport=src_port,
     dport=dst_port,
     flags="A",
-    seq=syn.seq + 1,
-    ack=synack.seq + 1,
+    seq=ack_seq,
+    ack=ack_ack,
     window=0xfaf0
 )
 
-print("[*] Sending ACK to complete handshake and waiting for response...")
-response = sr1(ip/ack, timeout=3)
+print("[*] Sending ACK to complete handshake...")
+send(ip/ack)
+print("[*] ACK sent.")
 
-if response:
-    print("[*] Received response after ACK:")
-    response.show()
+# Step 3: Send PSH with payload
+
+psh_payload = bytes.fromhex("7fe40c74000000000000060900003c535443500f003e")
+
+psh = TCP(
+    sport=src_port,
+    dport=dst_port,
+    flags="PA",
+    seq=ack_seq,
+    ack=ack_ack,
+    window=0xfaf0
+)
+
+print("[*] Sending PSH with payload...")
+send(ip/psh/psh_payload)
+print("[*] PSH sent.")
+
+# Step 4: Sniff response
+
+print("[*] Waiting for response...")
+resp = sniff(filter=f"tcp and host {dst_ip} and port {dst_port}", timeout=5, count=5)
+
+if resp:
+    print(f"[*] Received {len(resp)} packets:")
+    for pkt in resp:
+        pkt.show()
 else:
-    print("[!] No response received after ACK.")
+    print("[!] No response received.")
