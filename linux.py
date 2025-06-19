@@ -1,10 +1,7 @@
 from scapy.all import *
 import time
 
-# Full device path for sending packets (from your get_if_list output)
 iface_send = r"\\Device\\NPF_{26827995-6805-422C-BA17-07080BDF0E50}"
-
-# Friendly interface name for sniffing (from get_windows_if_list output)
 iface_sniff = "Wi-Fi"
 
 src_ip = "10.0.0.2"
@@ -72,18 +69,23 @@ send(ip/data_pkt/payload, iface=iface_send, verbose=0)
 ack_seq += len(payload)
 print("[*] Data sent.")
 
+# Open log file for appending
+logfile = open("mychron_log.txt", "a")
+
 def packet_callback(pkt):
     if IP in pkt and TCP in pkt:
         if pkt[IP].src == dst_ip and pkt[TCP].sport == dst_port:
-            if Raw in pkt:
-                data = pkt[Raw].load
-                hex_data = data.hex()
-                ascii_data = ''.join([chr(b) if 32 <= b < 127 else '.' for b in data])
-                print(f"[+] {len(data)} bytes received:")
-                print(f"    HEX   : {hex_data}")
-                print(f"    ASCII : {ascii_data}")
-            else:
-                print("[+] MyChron sent a TCP packet (no payload)")
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+            # Get raw TCP segment bytes (header + payload)
+            tcp_bytes = bytes(pkt[TCP])
+            
+            # Save as hex string to the log for readability, or binary if you want
+            hex_dump = tcp_bytes.hex()
+            
+            print(f"[{timestamp}] TCP packet received, length {len(tcp_bytes)} bytes")
+            logfile.write(f"[{timestamp}] TCP packet ({len(tcp_bytes)} bytes):\n")
+            logfile.write(hex_dump + "\n\n")
+
 
 print("[*] Listening for response from MyChron (10 seconds)...")
 sniff(
@@ -93,3 +95,5 @@ sniff(
     timeout=10,
     store=0
 )
+
+logfile.close()
