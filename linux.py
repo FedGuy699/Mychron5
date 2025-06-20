@@ -1,8 +1,8 @@
 from scapy.all import *
 import time
 
-iface_send = r"\\Device\\NPF_{26827995-6805-422C-BA17-07080BDF0E50}"
-iface_sniff = "Wi-Fi"
+# Use wlan0 on Linux
+iface = "wlan0"
 
 src_ip = "10.0.0.2"
 dst_ip = "10.0.0.1"
@@ -29,7 +29,7 @@ syn = TCP(
 )
 
 print("[*] Sending SYN...")
-synack = sr1(ip/syn, timeout=2, iface=iface_send, verbose=0)
+synack = sr1(ip/syn, timeout=2, iface=iface, verbose=0)
 if not synack:
     print("[!] No SYN-ACK received.")
     exit()
@@ -50,7 +50,7 @@ ack = TCP(
 )
 
 print("[*] Sending ACK...")
-send(ip/ack, iface=iface_send, verbose=0)
+send(ip/ack, iface=iface, verbose=0)
 print("[*] ACK sent.")
 
 payload = bytes.fromhex("3c685354435008000000003e00000000060800003c535443500e003e")
@@ -65,7 +65,7 @@ data_pkt = TCP(
 )
 
 print("[*] Sending initial data...")
-send(ip/data_pkt/payload, iface=iface_send, verbose=0)
+send(ip/data_pkt/payload, iface=iface, verbose=0)
 ack_seq += len(payload)
 print("[*] Data sent.")
 
@@ -76,20 +76,36 @@ def packet_callback(pkt):
     if IP in pkt and TCP in pkt:
         if pkt[IP].src == dst_ip and pkt[TCP].sport == dst_port:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-            # Get raw TCP segment bytes (header + payload)
             tcp_bytes = bytes(pkt[TCP])
-            
-            # Save as hex string to the log for readability, or binary if you want
             hex_dump = tcp_bytes.hex()
-            
+
             print(f"[{timestamp}] TCP packet received, length {len(tcp_bytes)} bytes")
             logfile.write(f"[{timestamp}] TCP packet ({len(tcp_bytes)} bytes):\n")
             logfile.write(hex_dump + "\n\n")
 
+            # Send ACK if MyChron sends data (PSH,ACK)
+            if "P" in pkt[TCP].flags:
+                mychron_seq = pkt[TCP].seq
+                mychron_len = len(pkt[TCP].payload)
+                global ack_ack, ack_seq  # reuse the global seq/ack state
+
+                ack_ack = mychron_seq + mychron_len  # acknowledge received data
+
+                ack_reply = TCP(
+                    sport=src_port,
+                    dport=dst_port,
+                    flags="A",
+                    seq=ack_seq,
+                    ack=ack_ack,
+                    window=64240
+                )
+                send(IP(src=src_ip, dst=dst_ip)/ack_reply, iface=iface, verbose=0)
+                print(f"[{timestamp}] Sent ACK for PSH/ACK (ack={ack_ack})")
+
 
 print("[*] Listening for response from MyChron (10 seconds)...")
 sniff(
-    iface=iface_sniff,
+    iface=iface,
     filter=f"tcp and src host {dst_ip} and src port {dst_port} and dst port {src_port}",
     prn=packet_callback,
     timeout=10,
@@ -97,3 +113,4 @@ sniff(
 )
 
 logfile.close()
+ 
