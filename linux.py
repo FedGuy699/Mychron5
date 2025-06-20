@@ -55,21 +55,7 @@ print("[*] ACK sent.")
 
 payload = bytes.fromhex("3c685354435008000000003e00000000060800003c535443500e003e")
 
-data_pkt = TCP(
-    sport=src_port,
-    dport=dst_port,
-    flags="PA",
-    seq=ack_seq,
-    ack=ack_ack,
-    window=64240
-)
-
-print("[*] Sending initial data...")
-send(ip/data_pkt/payload, iface=iface, verbose=0)
-ack_seq += len(payload)
-print("[*] Data sent.")
-
-# Open log file for appending
+# Open log file
 logfile = open("mychron_log.txt", "a")
 
 def packet_callback(pkt):
@@ -82,14 +68,15 @@ def packet_callback(pkt):
             print(f"[{timestamp}] TCP packet received, length {len(tcp_bytes)} bytes")
             logfile.write(f"[{timestamp}] TCP packet ({len(tcp_bytes)} bytes):\n")
             logfile.write(hex_dump + "\n\n")
+            logfile.flush()
 
-            # Send ACK if MyChron sends data (PSH,ACK)
+            # Send ACK immediately for PSH
             if "P" in pkt[TCP].flags:
                 mychron_seq = pkt[TCP].seq
                 mychron_len = len(pkt[TCP].payload)
-                global ack_ack, ack_seq  # reuse the global seq/ack state
+                global ack_ack, ack_seq
 
-                ack_ack = mychron_seq + mychron_len  # acknowledge received data
+                ack_ack = mychron_seq + mychron_len
 
                 ack_reply = TCP(
                     sport=src_port,
@@ -100,17 +87,32 @@ def packet_callback(pkt):
                     window=64240
                 )
                 send(IP(src=src_ip, dst=dst_ip)/ack_reply, iface=iface, verbose=0)
-                print(f"[{timestamp}] Sent ACK for PSH/ACK (ack={ack_ack})")
+                print(f"[{timestamp}] Sent ACK immediately for PSH (ack={ack_ack})")
 
-
-print("[*] Listening for response from MyChron (10 seconds)...")
-sniff(
+print("[*] Starting sniffer...")
+sniffer = AsyncSniffer(
     iface=iface,
     filter=f"tcp and src host {dst_ip} and src port {dst_port} and dst port {src_port}",
     prn=packet_callback,
-    timeout=10,
     store=0
 )
+sniffer.start()
+time.sleep(0.2)  # Allow sniffer to fully initialize
 
+print("[*] Sending initial data...")
+data_pkt = TCP(
+    sport=src_port,
+    dport=dst_port,
+    flags="PA",
+    seq=ack_seq,
+    ack=ack_ack,
+    window=64240
+)
+send(ip/data_pkt/payload, iface=iface, verbose=0)
+ack_seq += len(payload)
+print("[*] Data sent.")
+
+time.sleep(10)
+sniffer.stop()
 logfile.close()
- 
+print("[*] Sniffer stopped and log file closed.")
