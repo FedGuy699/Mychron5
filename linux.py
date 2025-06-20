@@ -1,7 +1,6 @@
 from scapy.all import *
 import time
 
-# Use wlan0 on Linux
 iface = "wlan0"
 
 src_ip = "10.0.0.2"
@@ -53,12 +52,20 @@ print("[*] Sending ACK...")
 send(ip/ack, iface=iface, verbose=0)
 print("[*] ACK sent.")
 
-payload = bytes.fromhex("3c685354435008000000003e00000000060800003c535443500e003e")
+# First PSH/ACK payload
+initial_payload = bytes.fromhex("3c685354435008000000003e00000000060800003c535443500e003e")
 
-# Open log file
+# Second PSH/ACK payload (in response to MyChron's 2nd PSH)
+response_payload = bytes.fromhex(
+    "3c6853544e4340000000003e0000000000000000100001000000000000004000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000003c53544e4352003e"
+)
+
+mychron_psh_count = 0
 logfile = open("mychron_log.txt", "a")
 
 def packet_callback(pkt):
+    global ack_ack, ack_seq, mychron_psh_count
+
     if IP in pkt and TCP in pkt:
         if pkt[IP].src == dst_ip and pkt[TCP].sport == dst_port:
             timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -70,24 +77,35 @@ def packet_callback(pkt):
             logfile.write(hex_dump + "\n\n")
             logfile.flush()
 
-            # Send ACK immediately for PSH
             if "P" in pkt[TCP].flags:
+                mychron_psh_count += 1
                 mychron_seq = pkt[TCP].seq
                 mychron_len = len(pkt[TCP].payload)
-                global ack_ack, ack_seq
-
                 ack_ack = mychron_seq + mychron_len
 
-                ack_reply = TCP(
-                    sport=src_port,
-                    dport=dst_port,
-                    flags="A",
-                    seq=ack_seq,
-                    ack=ack_ack,
-                    window=64240
-                )
-                send(IP(src=src_ip, dst=dst_ip)/ack_reply, iface=iface, verbose=0)
-                print(f"[{timestamp}] Sent ACK immediately for PSH (ack={ack_ack})")
+                if mychron_psh_count == 2:
+                    print(f"[{timestamp}] Sending PSH,ACK with response payload...")
+                    response = TCP(
+                        sport=src_port,
+                        dport=dst_port,
+                        flags="PA",
+                        seq=ack_seq,
+                        ack=ack_ack,
+                        window=64240
+                    )
+                    send(ip/response/response_payload, iface=iface, verbose=0)
+                    ack_seq += len(response_payload)
+                else:
+                    ack_reply = TCP(
+                        sport=src_port,
+                        dport=dst_port,
+                        flags="A",
+                        seq=ack_seq,
+                        ack=ack_ack,
+                        window=64240
+                    )
+                    send(ip/ack_reply, iface=iface, verbose=0)
+                    print(f"[{timestamp}] Sent ACK for PSH (ack={ack_ack})")
 
 print("[*] Starting sniffer...")
 sniffer = AsyncSniffer(
@@ -97,7 +115,7 @@ sniffer = AsyncSniffer(
     store=0
 )
 sniffer.start()
-time.sleep(0.2)  # Allow sniffer to fully initialize
+time.sleep(0.2)
 
 print("[*] Sending initial data...")
 data_pkt = TCP(
@@ -108,9 +126,9 @@ data_pkt = TCP(
     ack=ack_ack,
     window=64240
 )
-send(ip/data_pkt/payload, iface=iface, verbose=0)
-ack_seq += len(payload)
-print("[*] Data sent.")
+send(ip/data_pkt/initial_payload, iface=iface, verbose=0)
+ack_seq += len(initial_payload)
+print("[*] Initial data sent.")
 
 time.sleep(10)
 sniffer.stop()
